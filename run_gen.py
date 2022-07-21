@@ -23,6 +23,8 @@ import os
 import logging
 import argparse
 import math
+from collections import OrderedDict
+
 import numpy as np
 from tqdm import tqdm
 import multiprocessing
@@ -33,6 +35,8 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader, SequentialSampler, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
 from transformers import AdamW, get_linear_schedule_with_warmup
+
+from CustomDataParallel import CustomDataParallel
 from models import build_or_load_gen_model
 from evaluator import smooth_bleu
 from evaluator.CodeBLEU import calc_code_bleu
@@ -44,7 +48,6 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 def eval_ppl_epoch(args, eval_data, eval_examples, model, tokenizer):
     eval_sampler = SequentialSampler(eval_data)
@@ -72,6 +75,10 @@ def eval_ppl_epoch(args, eval_data, eval_examples, model, tokenizer):
                                 labels=target_ids, decoder_attention_mask=target_mask)
                 loss = outputs.loss
 
+        if args.n_gpu > 1:
+            loss = loss.mean()  # mean() to average on multi-gpu.
+        if args.gradient_accumulation_steps > 1:
+            loss = loss / args.gradient_accumulation_steps
         eval_loss += loss.item()
         batch_num += 1
     eval_loss = eval_loss / batch_num
@@ -176,7 +183,7 @@ def main():
     model.to(args.device)
     if args.n_gpu > 1:
         # for DataParallel
-        model = torch.nn.DataParallel(model)
+        model = CustomDataParallel(model, device_ids=[i for i in range(args.n_gpu)])
     pool = multiprocessing.Pool(args.cpu_cont)
     args.train_filename, args.dev_filename, args.test_filename = get_filenames(args.data_dir, args.task, args.sub_task)
     fa = open(os.path.join(args.output_dir, 'summary.log'), 'a+')
@@ -276,9 +283,13 @@ def main():
                     if not os.path.exists(last_output_dir):
                         os.makedirs(last_output_dir)
                     model_to_save = model.module if hasattr(model, 'module') else model
-                    output_model_file = os.path.join(last_output_dir, "pytorch_model.bin")
-                    torch.save(model_to_save.state_dict(), output_model_file)
-                    logger.info("Save the last model into %s", output_model_file)
+                    if args.save_pretrained:
+                        model_to_save.save_pretrained(last_output_dir)
+                        logger.info("Save the best ppl model into %s", last_output_dir)
+                    else:
+                        output_model_file = os.path.join(last_output_dir, "pytorch_model.bin")
+                        torch.save(model_to_save.state_dict(), output_model_file)
+                        logger.info("Save the last model into %s", output_model_file)
 
                 if eval_ppl < best_ppl:
                     not_loss_dec_cnt = 0
@@ -293,9 +304,13 @@ def main():
                         os.makedirs(output_dir)
                     if args.always_save_model:
                         model_to_save = model.module if hasattr(model, 'module') else model
-                        output_model_file = os.path.join(output_dir, "pytorch_model.bin")
-                        torch.save(model_to_save.state_dict(), output_model_file)
-                        logger.info("Save the best ppl model into %s", output_model_file)
+                        if args.save_pretrained:
+                            model_to_save.save_pretrained(output_dir)
+                            logger.info("Save the best ppl model into %s", output_dir)
+                        else:
+                            output_model_file = os.path.join(output_dir, "pytorch_model.bin")
+                            torch.save(model_to_save.state_dict(), output_model_file)
+                            logger.info("Save the best ppl model into %s", output_model_file)
                 else:
                     not_loss_dec_cnt += 1
                     logger.info("Ppl does not decrease for %d epochs", not_loss_dec_cnt)
@@ -336,9 +351,13 @@ def main():
                             os.makedirs(output_dir)
                         if args.data_num == -1 or args.always_save_model:
                             model_to_save = model.module if hasattr(model, 'module') else model
-                            output_model_file = os.path.join(output_dir, "pytorch_model.bin")
-                            torch.save(model_to_save.state_dict(), output_model_file)
-                            logger.info("Save the best bleu model into %s", output_model_file)
+                            if args.save_pretrained:
+                                model_to_save.save_pretrained(output_dir)
+                                logger.info("Save the best ppl model into %s", output_dir)
+                            else:
+                                output_model_file = os.path.join(output_dir, "pytorch_model.bin")
+                                torch.save(model_to_save.state_dict(), output_model_file)
+                                logger.info("Save the best bleu model into %s", output_model_file)
                     else:
                         not_bleu_em_inc_cnt += 1
                         logger.info("Bleu does not increase for %d epochs", not_bleu_em_inc_cnt)
@@ -365,7 +384,18 @@ def main():
         for criteria in ['best-bleu']:
             file = os.path.join(args.output_dir, 'checkpoint-{}/pytorch_model.bin'.format(criteria))
             logger.info("Reload model from {}".format(file))
-            model.load_state_dict(torch.load(file))
+            state_dict = torch.load(file)
+            new_state_dict = OrderedDict()
+            if args.n_gpu > 1:
+                for k, v in state_dict.items():
+                    if 'module' not in k:
+                        k = 'module.' + k
+                    else:
+                        k = k.replace('features.module.', 'module.features.')
+                    new_state_dict[k] = v
+                model.load_state_dict(new_state_dict)
+            else:
+                model.load_state_dict(state_dict)
             eval_examples, eval_data = load_and_cache_gen_data(args, args.test_filename, pool, tokenizer, 'test',
                                                                only_src=True, is_sample=False)
             result = eval_bleu_epoch(args, eval_data, eval_examples, model, tokenizer, 'test', criteria)
