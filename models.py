@@ -30,7 +30,7 @@ def build_or_load_gen_model(args):
         encoder = model_class.from_pretrained("microsoft/codebert-base", config=config)
         if args.model_name_or_path != "microsoft/codebert-base":
             logger.info("Reload model from {}".format(args.model_name_or_path))
-            state_dict = torch.load(args.model_name_or_path)
+            state_dict = torch.load(args.model_name_or_path + "/pytorch_model.bin")
             new_state_dict = OrderedDict()
             if args.n_gpu > 1:
                 for k, v in state_dict.items():
