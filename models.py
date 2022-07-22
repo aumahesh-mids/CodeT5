@@ -1,3 +1,5 @@
+from collections import OrderedDict
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -22,17 +24,30 @@ def get_model_size(model):
 def build_or_load_gen_model(args):
     logger.info("config: name %s, path %s", args.config_name, args.model_name_or_path)
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
+    config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name)
     if args.model_type == 'roberta':
-        config = RobertaConfig.from_pretrained("microsoft/codebert-base")
-        encoder = model_class.from_pretrained(args.model_name_or_path, config=config)
+        encoder = model_class.from_pretrained("microsoft/codebert-base", config=config)
+        if args.model_name_or_path != "microsoft/codebert-base":
+            logger.info("Reload model from {}".format(args.model_name_or_path))
+            state_dict = torch.load(args.model_name_or_path)
+            new_state_dict = OrderedDict()
+            if args.n_gpu > 1:
+                for k, v in state_dict.items():
+                    if 'module' not in k:
+                        k = 'module.' + k
+                    else:
+                        k = k.replace('features.module.', 'module.features.')
+                    new_state_dict[k] = v
+                encoder.load_state_dict(new_state_dict)
+            else:
+                encoder.load_state_dict(state_dict)
         decoder_layer = nn.TransformerDecoderLayer(d_model=config.hidden_size, nhead=config.num_attention_heads)
         decoder = nn.TransformerDecoder(decoder_layer, num_layers=6)
         model = Seq2Seq(encoder=encoder, decoder=decoder, config=config,
                         beam_size=args.beam_size, max_length=args.max_target_length,
                         sos_id=tokenizer.cls_token_id, eos_id=tokenizer.sep_token_id)
     else:
-        config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
         model = model_class.from_pretrained(args.model_name_or_path)
 
     ("Finish loading model [%s] from %s", get_model_size(model), args.model_name_or_path)
