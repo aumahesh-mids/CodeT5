@@ -24,9 +24,9 @@ def get_model_size(model):
 def build_or_load_gen_model(args):
     logger.info("config: name %s, path %s", args.config_name, args.model_name_or_path)
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
-    config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name)
     if args.model_type == 'roberta':
+        config = config_class.from_pretrained("microsoft/codebert-base")
         encoder = model_class.from_pretrained("microsoft/codebert-base", config=config)
         if args.model_name_or_path != "microsoft/codebert-base":
             logger.info("Reload model from {}".format(args.model_name_or_path))
@@ -48,6 +48,7 @@ def build_or_load_gen_model(args):
                         beam_size=args.beam_size, max_length=args.max_target_length,
                         sos_id=tokenizer.cls_token_id, eos_id=tokenizer.sep_token_id)
     else:
+        config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
         model = model_class.from_pretrained(args.model_name_or_path)
 
     ("Finish loading model [%s] from %s", get_model_size(model), args.model_name_or_path)
