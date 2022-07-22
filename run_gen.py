@@ -302,6 +302,8 @@ def main():
                         output_model_file = os.path.join(last_output_dir, "pytorch_model.bin")
                         torch.save(model_to_save.state_dict(), output_model_file)
                         logger.info("Save the last model into %s", output_model_file)
+                        config_json_file = os.path.join(last_output_dir, "config.json")
+                        model.config.to_json_file(config_json_file)
 
                 if eval_ppl < best_ppl:
                     not_loss_dec_cnt = 0
@@ -323,6 +325,8 @@ def main():
                             output_model_file = os.path.join(output_dir, "pytorch_model.bin")
                             torch.save(model_to_save.state_dict(), output_model_file)
                             logger.info("Save the best ppl model into %s", output_model_file)
+                            config_json_file = os.path.join(last_output_dir, "config.json")
+                            model.config.to_json_file(config_json_file)
                 else:
                     not_loss_dec_cnt += 1
                     logger.info("Ppl does not decrease for %d epochs", not_loss_dec_cnt)
@@ -370,6 +374,8 @@ def main():
                                 output_model_file = os.path.join(output_dir, "pytorch_model.bin")
                                 torch.save(model_to_save.state_dict(), output_model_file)
                                 logger.info("Save the best bleu model into %s", output_model_file)
+                                config_json_file = os.path.join(last_output_dir, "config.json")
+                                model.config.to_json_file(config_json_file)
                     else:
                         not_bleu_em_inc_cnt += 1
                         logger.info("Bleu does not increase for %d epochs", not_bleu_em_inc_cnt)
